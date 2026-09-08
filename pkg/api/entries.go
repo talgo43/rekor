@@ -86,7 +86,6 @@ func logEntryFromLeaf(ctx context.Context, leaf *trillian.LogLeaf, signedLogRoot
 	proof *trillian.Proof, tid int64, ranges *sharding.LogRanges, cachedCheckpoints map[int64]string,
 	checkpointHostname string) (models.LogEntry, error) {
 
-	log.ContextLogger(ctx).Debugf("log entry from leaf %d", leaf.GetLeafIndex())
 	root := &ttypes.LogRootV1{}
 	if err := root.UnmarshalBinary(signedLogRoot.LogRoot); err != nil {
 		return nil, err
@@ -188,10 +187,25 @@ func logEntryFromLeaf(ctx context.Context, leaf *trillian.LogLeaf, signedLogRoot
 		entryID: logEntryAnon}, nil
 }
 
+func logPrivacyLeakage(httpRequest *http.Request, logEntry models.LogEntry) {
+	ctx := httpRequest.Context()
+	var uuid string
+	for location := range logEntry {
+		uuid = location
+	}
+
+	bodyBytes, ok := logEntry[uuid].Body.([]byte)
+	if ok {
+		log.ContextLogger(ctx).Debugf("[PRIVACY LEAK] client=%s requested uuid=%s -> body=%s",
+			httpRequest.RemoteAddr, uuid, string(bodyBytes))
+	}
+}
+
 // GetLogEntryByIndexHandler returns the entry and inclusion proof for a specified log index
 func GetLogEntryByIndexHandler(params entries.GetLogEntryByIndexParams) middleware.Responder {
 	ctx := params.HTTPRequest.Context()
 	logEntry, err := retrieveLogEntryByIndex(ctx, int(params.LogIndex))
+	logPrivacyLeakage(params.HTTPRequest, logEntry)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return handleRekorAPIError(params, http.StatusNotFound, fmt.Errorf("grpc error: %w", err), "")
@@ -583,6 +597,7 @@ func SearchLogQueryHandler(params entries.SearchLogQueryParams) middleware.Respo
 			err := sharding.ValidateEntryID(entryID)
 			if err == nil {
 				logEntry, err := retrieveLogEntry(httpReqCtx, entryID)
+				logPrivacyLeakage(params.HTTPRequest, logEntry)
 				if err != nil && !errors.Is(err, ErrNotFound) {
 					return handleRekorAPIError(params, http.StatusInternalServerError, err, fmt.Sprintf("error getting log entry for %s", entryID))
 				} else if err == nil {
@@ -655,6 +670,7 @@ func SearchLogQueryHandler(params entries.SearchLogQueryParams) middleware.Respo
 					continue
 				}
 				logEntry, err := logEntryFromLeaf(httpReqCtx, leafResp.Leaf, leafResp.SignedLogRoot, leafResp.Proof, shard, api.logRanges, api.cachedCheckpoints, api.checkpointHostname)
+				logPrivacyLeakage(params.HTTPRequest, logEntry)
 				if err != nil {
 					return handleRekorAPIError(params, http.StatusInternalServerError, err, trillianUnexpectedResult)
 				}
@@ -709,8 +725,6 @@ func retrieveLogEntryByIndex(ctx context.Context, logIndex int) (models.LogEntry
 // If a tree ID is specified, look in that tree
 // Otherwise, look through all inactive and active shards
 func retrieveLogEntry(ctx context.Context, entryUUID string) (models.LogEntry, error) {
-	log.ContextLogger(ctx).Debugf("Retrieving log entry %v", entryUUID)
-
 	uuid, err := sharding.GetUUIDFromIDString(entryUUID)
 	if err != nil {
 		return nil, &types.InputValidationError{Err: err}
@@ -744,7 +758,6 @@ func retrieveLogEntry(ctx context.Context, entryUUID string) (models.LogEntry, e
 }
 
 func retrieveUUIDFromTree(ctx context.Context, uuid string, tid int64) (models.LogEntry, error) {
-	log.ContextLogger(ctx).Debugf("Retrieving log entry %v from tree %d", uuid, tid)
 
 	// Reject tree IDs not in the configured shard set before they reach the
 	// Trillian client cache or backend.
@@ -761,7 +774,6 @@ func retrieveUUIDFromTree(ctx context.Context, uuid string, tid int64) (models.L
 	if err != nil {
 		return models.LogEntry{}, fmt.Errorf("getting log client for tree %d: %w", tid, err)
 	}
-	log.ContextLogger(ctx).Debugf("Attempting to retrieve UUID %v from TreeID %v", uuid, tid)
 
 	resp := tc.GetLeafAndProofByHash(ctx, hashValue)
 	switch resp.Status {

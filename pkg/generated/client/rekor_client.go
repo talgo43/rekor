@@ -26,6 +26,7 @@ import (
 	"github.com/go-openapi/strfmt"
 	"github.com/sigstore/rekor/pkg/generated/client/entries"
 	"github.com/sigstore/rekor/pkg/generated/client/index"
+	"github.com/sigstore/rekor/pkg/generated/client/pir"
 	"github.com/sigstore/rekor/pkg/generated/client/pubkey"
 	"github.com/sigstore/rekor/pkg/generated/client/tlog"
 )
@@ -75,6 +76,7 @@ func New(transport runtime.ContextualTransport, formats strfmt.Registry) *Rekor 
 	cli.Transport = transport
 	cli.Entries = entries.New(transport, formats)
 	cli.Index = index.New(transport, formats)
+	cli.Pir = pir.New(transport, formats)
 	cli.Pubkey = pubkey.New(transport, formats)
 	cli.Tlog = tlog.New(transport, formats)
 
@@ -140,6 +142,8 @@ type Rekor struct {
 
 	Index index.ClientService
 
+	Pir pir.ClientService
+
 	Pubkey pubkey.ClientService
 
 	Tlog tlog.ClientService
@@ -152,6 +156,7 @@ func (c *Rekor) SetTransport(transport runtime.ContextualTransport) {
 	c.Transport = transport
 	c.Entries.SetTransport(transport)
 	c.Index.SetTransport(transport)
+	c.Pir.SetTransport(transport)
 	c.Pubkey.SetTransport(transport)
 	c.Tlog.SetTransport(transport)
 }

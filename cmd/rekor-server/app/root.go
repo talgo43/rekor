@@ -51,6 +51,7 @@ var (
 		"getLogProof",
 		"createLogEntry",
 		"getLogEntryByIndex",
+		"getLogEntryWithPIR",
 		"getLogEntryByUUID",
 		"searchLogQuery",
 	}

@@ -34,6 +34,7 @@ import (
 	"github.com/go-openapi/swag/cmdutils"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/entries"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/index"
+	"github.com/sigstore/rekor/pkg/generated/restapi/operations/pir"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/pubkey"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/tlog"
 )
@@ -82,6 +83,12 @@ func NewRekorServerAPI(spec *loads.Document) *RekorServerAPI {
 			_ = params
 
 			return middleware.NotImplemented("operation entries.GetLogEntryByUUID has not yet been implemented")
+		}),
+
+		PirGetLogEntryWithPIRHandler: pir.GetLogEntryWithPIRHandlerFunc(func(params pir.GetLogEntryWithPIRParams) middleware.Responder {
+			_ = params
+
+			return middleware.NotImplemented("operation pir.GetLogEntryWithPIR has not yet been implemented")
 		}),
 
 		TlogGetLogInfoHandler: tlog.GetLogInfoHandlerFunc(func(params tlog.GetLogInfoParams) middleware.Responder {
@@ -158,6 +165,8 @@ type RekorServerAPI struct {
 	EntriesGetLogEntryByIndexHandler entries.GetLogEntryByIndexHandler
 	// EntriesGetLogEntryByUUIDHandler sets the operation handler for the get log entry by UUID operation
 	EntriesGetLogEntryByUUIDHandler entries.GetLogEntryByUUIDHandler
+	// PirGetLogEntryWithPIRHandler sets the operation handler for the get log entry with p i r operation
+	PirGetLogEntryWithPIRHandler pir.GetLogEntryWithPIRHandler
 	// TlogGetLogInfoHandler sets the operation handler for the get log info operation
 	TlogGetLogInfoHandler tlog.GetLogInfoHandler
 	// TlogGetLogProofHandler sets the operation handler for the get log proof operation
@@ -256,6 +265,9 @@ func (o *RekorServerAPI) Validate() error {
 	}
 	if o.EntriesGetLogEntryByUUIDHandler == nil {
 		unregistered = append(unregistered, "entries.GetLogEntryByUUIDHandler")
+	}
+	if o.PirGetLogEntryWithPIRHandler == nil {
+		unregistered = append(unregistered, "pir.GetLogEntryWithPIRHandler")
 	}
 	if o.TlogGetLogInfoHandler == nil {
 		unregistered = append(unregistered, "tlog.GetLogInfoHandler")
@@ -377,6 +389,10 @@ func (o *RekorServerAPI) initHandlerCache() {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
 	o.handlers["GET"]["/api/v1/log/entries/{entryUUID}"] = entries.NewGetLogEntryByUUID(o.context, o.EntriesGetLogEntryByUUIDHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/api/v1/log/pirEntry"] = pir.NewGetLogEntryWithPIR(o.context, o.PirGetLogEntryWithPIRHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}

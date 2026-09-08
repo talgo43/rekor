@@ -46,6 +46,7 @@ import (
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/entries"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/index"
+	"github.com/sigstore/rekor/pkg/generated/restapi/operations/pir"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/pubkey"
 	"github.com/sigstore/rekor/pkg/generated/restapi/operations/tlog"
 	"github.com/sigstore/rekor/pkg/log"
@@ -100,6 +101,7 @@ func configureAPI(api *operations.RekorServerAPI) http.Handler {
 	api.EntriesSearchLogQueryHandler = entries.SearchLogQueryHandlerFunc(pkgapi.SearchLogQueryNotImplementedHandler)
 	api.PubkeyGetPublicKeyHandler = pubkey.GetPublicKeyHandlerFunc(pkgapi.GetPublicKeyNotImplementedHandler)
 	api.TlogGetLogProofHandler = tlog.GetLogProofHandlerFunc(pkgapi.GetLogProofNotImplementedHandler)
+	api.PirGetLogEntryWithPIRHandler = pir.GetLogEntryWithPIRHandlerFunc(pkgapi.GetLogEntryWithPIRHandler)
 
 	enabledAPIEndpoints := viper.GetStringSlice("enabled_api_endpoints")
 	if !slices.Contains(enabledAPIEndpoints, "searchIndex") && viper.GetBool("enable_retrieve_api") {
@@ -125,6 +127,8 @@ func configureAPI(api *operations.RekorServerAPI) http.Handler {
 			api.EntriesGetLogEntryByUUIDHandler = entries.GetLogEntryByUUIDHandlerFunc(pkgapi.GetLogEntryByUUIDHandler)
 		case "searchLogQuery":
 			api.EntriesSearchLogQueryHandler = entries.SearchLogQueryHandlerFunc(pkgapi.SearchLogQueryHandler)
+		case "getLogEntryWithPIR":
+			api.PirGetLogEntryWithPIRHandler = pir.GetLogEntryWithPIRHandlerFunc(pkgapi.GetLogEntryWithPIRHandler)
 		default:
 			log.Logger.Panicf("Unknown API endpoint requested: %s", enabledAPI)
 		}
@@ -154,6 +158,8 @@ func configureAPI(api *operations.RekorServerAPI) http.Handler {
 			recordMetricsForAPI(api, "GET", "/api/v1/log/entries/{entryUUID}")                 // add metrics
 		case "searchLogQuery":
 			recordMetricsForAPI(api, "POST", "/api/v1/log/entries/retrieve") // add metrics
+		case "getLogEntryWithPIR":
+			recordMetricsForAPI(api, "POST", "/api/v1/log/pirEntry") // add metrics
 		}
 	}
 	api.RegisterFormat("signedCheckpoint", &util.SignedNote{}, util.SignedCheckpointValidator)

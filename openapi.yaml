@@ -240,6 +240,30 @@ paths:
         default:
           $ref: '#/responses/InternalServerError'
 
+  /api/v1/log/pirEntry:
+    post:
+      summary: Retrieves an pir-response for a pir-query, consists of an inclusion proof from the transparency log (if it exists), BFV based
+      operationId: getLogEntryWithPIR
+      tags:
+        - pir
+      parameters:
+        - in: body          
+          name: entry
+          required: true
+          schema:
+            $ref: '#/definitions/PirQuery'
+      responses:
+        200:
+          description: the entry in the transparency log requested along with an inclusion proof
+          schema:
+            $ref: '#/definitions/PirResponse'
+        400:
+          $ref: '#/responses/BadContent'
+        422:
+          $ref: '#/responses/UnprocessableEntity'
+        default:
+          $ref: '#/responses/InternalServerError'
+          
 definitions:
   ProposedEntry:
     type: object
@@ -603,6 +627,32 @@ definitions:
     required:
       - rootHash
       - hashes
+
+  PirQuery:
+    type: object
+    properties:
+      publicContext:
+        type: string
+        format: byte
+      queryBlocks:
+        type: array
+        items:
+          type: string
+          format: byte
+    required:
+      - "publicContext"
+      - "queryBlocks"
+
+  PirResponse:
+    type: object
+    properties:
+      responseChunks:
+        type: array
+        items:
+          type: string
+          format: byte
+    required:
+      - "responseChunks"
 
   InclusionProof:
     type: object
