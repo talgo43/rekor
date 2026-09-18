@@ -88,7 +88,7 @@ func BuildQueryHttpRequest(ctx context.Context, pirQuery *models.PirQuery) (*htt
 		return nil, err
 	}
 
-	pirQueryURL := fmt.Sprint(pirsvc.PIRServiceHost, ":", pirsvc.PIRServicePort, pirsvc.PIRServiceQueryPath)
+	pirQueryURL := fmt.Sprint("http://", pirsvc.PIRServiceHost, ":", pirsvc.PIRServicePort, pirsvc.PIRServiceQueryPath)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, pirQueryURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err

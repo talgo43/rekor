@@ -105,6 +105,7 @@ services:
       target: "deploy"
     environment:
       - TMPDIR=/var/run/attestations # workaround for https://github.com/google/go-cloud/issues/3294
+      - PIR_PREPARE_TOKEN=${PIR_PREPARE_TOKEN}
     command: [
       "rekor-server",
       "serve",
@@ -138,3 +139,12 @@ services:
       timeout: 3s
       retries: 15
       start_period: 30s
+
+  pir-service:
+    build:
+      context: ../Privacy-and-Networks-Final-Project/FinalProjectCode
+    environment:
+      - PIR_PREPARE_TOKEN=${PIR_PREPARE_TOKEN}
+    restart: always
+    ports:
+      - "8787:8787"

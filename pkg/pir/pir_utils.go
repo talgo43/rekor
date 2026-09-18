@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	PIRServiceHost              = "host.docker.internal"
+	PIRServiceHost              = "pir-service"
 	PIRServicePort              = "8787"
 	PIRServicePreparePath       = "/prepare"
 	PIRServiceQueryPath         = "/query"

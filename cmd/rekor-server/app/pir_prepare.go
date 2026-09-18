@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 
 	"github.com/sigstore/rekor/cmd/rekor-cli/app/format"
 	"github.com/sigstore/rekor/pkg/client"
@@ -20,6 +22,7 @@ import (
 
 const (
 	PIRFlagRekorServerURL = "pir.rekor_server_url"
+	PIRPrepareTokenEnvVar = "PIR_PREPARE_TOKEN"
 )
 
 type pirFlatLog struct {
@@ -85,11 +88,16 @@ func PublishFlattenLog(cmd *cobra.Command, flatLog [][]byte) error {
 		return err
 	}
 
-	defer response.Body.Close()
-
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("pir_service %s failed with status %d", pir.PIRServicePreparePath, response.StatusCode)
+		body, readErr := io.ReadAll(response.Body)
+		if readErr != nil {
+			return fmt.Errorf("pir_service %s failed with status %d, fetching error failed with %d", pir.PIRServicePreparePath, response.StatusCode, readErr)
+		}
+
+		return fmt.Errorf("pir_service %s failed with status %d: %s", pir.PIRServicePreparePath, response.StatusCode, body)
 	}
+
+	defer response.Body.Close()
 
 	return nil
 }
@@ -104,13 +112,14 @@ func BuildPrepareRequest(cmd *cobra.Command, flatLog [][]byte) (*http.Request, e
 		return nil, err
 	}
 
-	pirPrepareURL := fmt.Sprint(pir.PIRServiceHost, ":", pir.PIRServicePort, pir.PIRServicePreparePath)
+	pirPrepareURL := fmt.Sprint("http://", pir.PIRServiceHost, ":", pir.PIRServicePort, pir.PIRServicePreparePath)
 	request, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, pirPrepareURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+os.Getenv(PIRPrepareTokenEnvVar))
 	return request, nil
 }
 
