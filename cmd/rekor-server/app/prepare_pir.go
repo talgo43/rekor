@@ -2,20 +2,21 @@ package app
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/google/trillian/types"
 	"github.com/sigstore/rekor/cmd/rekor-cli/app/format"
-	internalclient "github.com/sigstore/rekor/internal/trillianclient"
+	"github.com/sigstore/rekor/pkg/client"
+	"github.com/sigstore/rekor/pkg/generated/client/entries"
+	"github.com/sigstore/rekor/pkg/generated/client/tlog"
 	"github.com/sigstore/rekor/pkg/log"
 	"github.com/sigstore/rekor/pkg/pirsnapshot"
-	"github.com/sigstore/rekor/pkg/trillianclient"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"google.golang.org/grpc/codes"
 )
 
 type pirFlatLog struct {
@@ -24,7 +25,7 @@ type pirFlatLog struct {
 
 var preparePIRCmd = &cobra.Command{
 	Use:     "prepare-pir",
-	Example: `  rekor-server prepare-pir`,
+	Example: `  rekor-server prepare-pir --prepare_pir.rekor_servre_url <rekor_server_url>`,
 	Short:   "Rekor prepare PIR command",
 	Long:    `Publish the log entries to the PIR manager, to be used on PIR verification`,
 	PreRun: func(cmd *cobra.Command, _ []string) {
@@ -34,6 +35,7 @@ var preparePIRCmd = &cobra.Command{
 		}
 	},
 	Run: format.WrapCmd(func(cmd *cobra.Command, _ []string) (interface{}, error) {
+
 		log.ConfigureLogger(viper.GetString("log_type"), viper.GetString("trace-string-prefix"))
 
 		flat_log, err := GetFlattenLog(cmd)
@@ -88,38 +90,73 @@ func PublishFlattenLog(cmd *cobra.Command, flat_log [][]byte) error {
 }
 
 func GetFlattenLog(cmd *cobra.Command) ([][]byte, error) {
-	address := viper.GetString("trillian_log_server.address")
-	port := uint16(viper.GetUint16("trillian_log_server.port"))
-	treeID, err := GetTreeID(cmd)
+	rekor_server_url := viper.GetString("prepare_pir.rekor_server_url")
+	rekorClient, err := client.GetRekorClient(rekor_server_url)
 	if err != nil {
 		return nil, err
 	}
 
-	cm := trillianclient.NewClientManager(nil, trillianclient.GRPCConfig{
-		Address: address,
-		Port:    port,
-	})
-	tc, err := cm.GetClient(treeID)
+	infoParams := tlog.NewGetLogInfoParams()
+	result, err := rekorClient.Tlog.GetLogInfoContext(cmd.Context(), infoParams)
 	if err != nil {
 		return nil, err
 	}
 
-	treeSize, err := GetTreeSize(cmd, tc)
-	if err != nil {
-		return nil, err
+	logInfo := result.GetPayload()
+	treeSize := logInfo.TreeSize
+
+	authEntries := []*pirsnapshot.AuthenticatedEntry{}
+
+	for i := int64(0); i < *treeSize; i++ {
+		getEntryParams := entries.NewGetLogEntryByIndexParams().WithLogIndex(i)
+		resp, err := rekorClient.Entries.GetLogEntryByIndexContext(cmd.Context(), getEntryParams)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, entry := range resp.Payload {
+			leaf, err := base64.StdEncoding.DecodeString(entry.Body.(string))
+			if err != nil {
+				return nil, err
+			}
+
+			proof := [][]byte{}
+			for _, hash := range entry.Verification.InclusionProof.Hashes {
+				hashBytes, err := hex.DecodeString(hash)
+				if err != nil {
+					return nil, err
+				}
+
+				proof = append(proof, hashBytes)
+			}
+
+			root, err := hex.DecodeString(*entry.Verification.InclusionProof.RootHash)
+			if err != nil {
+				return nil, err
+			}
+
+			authEntry := pirsnapshot.AuthenticatedEntry{
+				Leaf:                 leaf,
+				Proof:                proof,
+				Root:                 root,
+				TreeSize:             *entry.Verification.InclusionProof.TreeSize,
+				Checkpoint:           []byte(*entry.Verification.InclusionProof.Checkpoint),
+				SignedEntryTimestamp: []byte(entry.Verification.SignedEntryTimestamp),
+				IntegratedTime:       *entry.IntegratedTime,
+				LogId:                *entry.LogID,
+				LogIndex:             *entry.LogIndex,
+			}
+
+			err = pirsnapshot.VerifyAuthenticatedEntry(authEntry)
+			if err != nil {
+				return nil, err
+			}
+
+			authEntries = append(authEntries, &authEntry)
+		}
 	}
 
-	logEntries, err := pirsnapshot.ExportLogEntries(cmd.Context(), tc, treeSize)
-	if err != nil {
-		return nil, err
-	}
-
-	err = pirsnapshot.VerifyExportedLogEntries(cmd.Context(), logEntries)
-	if err != nil {
-		return nil, err
-	}
-
-	flat_log, err := pirsnapshot.FlattenForPIR(cmd.Context(), logEntries)
+	flat_log, err := pirsnapshot.FlattenForPIR(cmd.Context(), authEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -127,30 +164,7 @@ func GetFlattenLog(cmd *cobra.Command) ([][]byte, error) {
 	return flat_log, nil
 }
 
-func GetTreeID(cmd *cobra.Command) (int64, error) {
-	treeID := viper.GetInt64("trillian_log_server.tlog_id")
-	if treeID == 0 {
-		return 0, fmt.Errorf("No tree ID specified, please set trillian_log_server.tlog_id")
-	}
-
-	return treeID, nil
-}
-
-func GetTreeSize(cmd *cobra.Command, tc internalclient.Client) (int64, error) {
-	resp := tc.GetLatest(cmd.Context())
-	if resp.Status != codes.OK {
-		return 0, fmt.Errorf("Failed to get latest from trillian client, status: %s", resp.Status.String())
-	}
-
-	root := &types.LogRootV1{}
-	err := root.UnmarshalBinary(resp.GetLatestResult.SignedLogRoot.LogRoot)
-	if err != nil {
-		return 0, err
-	}
-
-	return int64(root.TreeSize), nil
-}
-
 func init() {
+	preparePIRCmd.Flags().String("prepare_pir.rekor_server_url", "http://localhost:3000", "Address of server to call")
 	rootCmd.AddCommand(preparePIRCmd)
 }

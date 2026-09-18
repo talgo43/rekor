@@ -14,6 +14,34 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+type AuthenticatedEntry struct {
+	Leaf                 []byte
+	Proof                [][]byte
+	Root                 []byte
+	TreeSize             int64
+	Checkpoint           []byte
+	SignedEntryTimestamp []byte
+	IntegratedTime       int64
+	LogId                string
+	LogIndex             int64
+}
+
+type pirEntry struct {
+	Leaf                 []byte   `json:"leaf"`
+	Proof                [][]byte `json:"proof"`
+	Root                 []byte   `json:"root"`
+	TreeSize             int64    `json:"treeSize"`
+	Checkpoint           []byte   `json:"checkpoint"`
+	SignedEntryTimestamp []byte   `json:"signedEntryTimestamp"`
+	IntegratedTime       int64    `json:"integratedTime"`
+	LogId                string   `json:"logId"`
+}
+
+const (
+	LengthPrefixBytes = 4
+	EntrySizeBytes    = 2048
+)
+
 func ExportLogEntries(ctx context.Context, tc internalclient.Client, N int64) ([]*trillian.GetEntryAndProofResponse, error) {
 	leavesWithProofs := []*trillian.GetEntryAndProofResponse{}
 	i := int64(0)
@@ -57,40 +85,45 @@ func VerifyExportedLogEntries(ctx context.Context, logEntries []*trillian.GetEnt
 	return nil
 }
 
-type pirEntry struct {
-	Leaf  []byte   `json:"leaf"`
-	Proof [][]byte `json:"proof"`
-	Root  []byte   `json:"root"`
-}
+func VerifyAuthenticatedEntry(authEntry AuthenticatedEntry) error {
 
-const (
-	LengthPrefixBytes = 4
-	EntrySizeBytes    = 1024
-)
-
-func FlattenForPIR(ctx context.Context, logEntries []*trillian.GetEntryAndProofResponse) ([][]byte, error) {
-	flat_db := [][]byte{}
-	for _, entry := range logEntries {
-		pirEntry := pirEntry{
-			Leaf:  entry.GetLeaf().GetLeafValue(),
-			Proof: entry.GetProof().GetHashes(),
-			Root:  entry.GetSignedLogRoot().GetLogRoot(),
-		}
-
-		raw_entry, err := json.Marshal(pirEntry)
-		if err != nil {
-			return nil, err
-		}
-
-		padded_entry, err := PadEntry(raw_entry)
-		if err != nil {
-			return nil, err
-		}
-
-		flat_db = append(flat_db, padded_entry)
+	leafHash := rfc6962.DefaultHasher.HashLeaf(authEntry.Leaf)
+	err := proof.VerifyInclusion(rfc6962.DefaultHasher, uint64(authEntry.LogIndex), uint64(authEntry.TreeSize), leafHash, authEntry.Proof, authEntry.Root)
+	if err != nil {
+		return err
 	}
 
-	return flat_db, nil
+	return nil
+}
+
+func FlattenForPIR(ctx context.Context, logEntries []*AuthenticatedEntry) ([][]byte, error) {
+	flatDB := [][]byte{}
+	for _, authEntry := range logEntries {
+		pirEntry := pirEntry{
+			Leaf:                 authEntry.Leaf,
+			Proof:                authEntry.Proof,
+			Root:                 authEntry.Root,
+			TreeSize:             authEntry.TreeSize,
+			Checkpoint:           authEntry.Checkpoint,
+			SignedEntryTimestamp: authEntry.SignedEntryTimestamp,
+			IntegratedTime:       authEntry.IntegratedTime,
+			LogId:                authEntry.LogId,
+		}
+
+		rawEntry, err := json.Marshal(pirEntry)
+		if err != nil {
+			return nil, err
+		}
+
+		paddedEntry, err := PadEntry(rawEntry)
+		if err != nil {
+			return nil, err
+		}
+
+		flatDB = append(flatDB, paddedEntry)
+	}
+
+	return flatDB, nil
 }
 
 func PadEntry(entry []byte) ([]byte, error) {
