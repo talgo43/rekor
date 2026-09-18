@@ -13,8 +13,11 @@ import (
 
 	"github.com/sigstore/rekor/cmd/rekor-cli/app/format"
 	"github.com/sigstore/rekor/pkg/client"
+	rclient "github.com/sigstore/rekor/pkg/generated/client"
+	"github.com/sigstore/rekor/pkg/generated/client/tlog"
 	"github.com/sigstore/rekor/pkg/log"
 	"github.com/sigstore/rekor/pkg/pir"
+	"github.com/sigstore/rekor/pkg/util"
 	"github.com/sigstore/rekor/pkg/verify"
 )
 
@@ -70,14 +73,14 @@ var pirVerifyCmd = &cobra.Command{
 		log.ConfigureLogger(viper.GetString("log_type"), viper.GetString("trace-string-prefix"))
 
 		logIndex := viper.GetInt64("log-index")
-		treeId := viper.GetInt64("tree-id")
+		treeID := viper.GetInt64("tree-id")
 
 		pirLogEntry, err := GetLogEntryByIndexWithPIR(logIndex)
 		if err != nil {
 			return nil, err
 		}
 
-		err = VerifyPIREntry(cmd, pirLogEntry, logIndex, treeId)
+		err = VerifyPIREntry(cmd, pirLogEntry, logIndex, treeID)
 		if err != nil {
 			return nil, err
 		}
@@ -92,13 +95,41 @@ var pirVerifyCmd = &cobra.Command{
 	}),
 }
 
-func VerifyPIREntry(cmd *cobra.Command, pirEntry pir.PIRLogEntry, logIndex int64, treeId int64) error {
+func VerifyPIREntry(cmd *cobra.Command, pirEntry pir.PIRLogEntry, logIndex int64, treeID int64) error {
 	rekorClient, err := client.GetRekorClient(viper.GetString("rekor_server"), client.WithUserAgent(UserAgent()), client.WithRetryCount(viper.GetUint("retry")), client.WithLogger(log.CliLogger))
 	if err != nil {
 		return err
 	}
 
-	verifier, err := loadVerifier(cmd.Context(), rekorClient, strconv.FormatInt(treeId, 10))
+	verifier, err := loadVerifier(cmd.Context(), rekorClient, strconv.FormatInt(treeID, 10))
+	if err != nil {
+		return err
+	}
+
+	currentSignedTreeHead, err := GetSignedHead(cmd, rekorClient)
+	if err != nil {
+		return err
+	}
+
+	currentCheckpoint := util.SignedCheckpoint{}
+	if err := currentCheckpoint.UnmarshalText([]byte(*currentSignedTreeHead)); err != nil {
+		return err
+	}
+
+	if !currentCheckpoint.Verify(verifier) {
+		return errors.New("signature on tree head did not verify")
+	}
+
+	snapshotCheckpoint := util.SignedCheckpoint{}
+	if err := snapshotCheckpoint.UnmarshalText([]byte(pirEntry.Checkpoint)); err != nil {
+		return err
+	}
+
+	if !snapshotCheckpoint.Verify(verifier) {
+		return errors.New("signature on tree head did not verify")
+	}
+
+	err = verify.ProveConsistency(cmd.Context(), rekorClient, &snapshotCheckpoint, &currentCheckpoint, strconv.FormatInt(treeID, 10))
 	if err != nil {
 		return err
 	}
@@ -127,7 +158,18 @@ func GetLogEntryByIndexWithPIR(logIndex int64) (pir.PIRLogEntry, error) {
 	return entry, nil
 }
 
-func addTreeIdFlag(cmd *cobra.Command, required bool) error {
+func GetSignedHead(cmd *cobra.Command, rekorClient *rclient.Rekor) (*string, error) {
+	infoParams := tlog.NewGetLogInfoParams()
+	result, err := rekorClient.Tlog.GetLogInfoContext(cmd.Context(), infoParams)
+	if err != nil {
+		return nil, err
+	}
+
+	logInfo := result.GetPayload()
+	return logInfo.SignedTreeHead, nil
+}
+
+func addTreeIDFlag(cmd *cobra.Command, required bool) error {
 	return addFlagToCmd(cmd, required, uintFlag, "tree-id", "the ID of the rekor tree")
 }
 
@@ -137,7 +179,7 @@ func init() {
 		log.CliLogger.Fatal("Error parsing cmd line args:", err)
 	}
 
-	if err := addTreeIdFlag(pirVerifyCmd, false); err != nil {
+	if err := addTreeIDFlag(pirVerifyCmd, false); err != nil {
 		log.CliLogger.Fatal("Error parsing cmd line args:", err)
 	}
 
