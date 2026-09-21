@@ -147,4 +147,4 @@ services:
       - PIR_PREPARE_TOKEN=${PIR_PREPARE_TOKEN}
     restart: always
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"

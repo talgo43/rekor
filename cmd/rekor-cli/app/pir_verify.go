@@ -1,12 +1,17 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -22,7 +27,7 @@ import (
 )
 
 const (
-	PIRQueryRekorServerScriptPath = "../Privacy-and-Networks-Final-Project/FinalProjectCode/pir_query_rekor_server.py"
+	PIRQueryRekorServerScriptPath = "../Privacy-and-Networks-Final-Project/FinalProjectCode/pir_client.py"
 )
 
 type pirVerifyCmdOutput struct {
@@ -50,12 +55,16 @@ func validatePirQueryFlags() error {
 		return errors.New("'tree-id' must be specified")
 	}
 
+	if viper.GetString("artifact") == "" && viper.GetString("artifact-hash") == "" {
+		return errors.New("either 'artifact' or 'artifact-hash' must be specified")
+	}
+
 	return nil
 }
 
 var pirVerifyCmd = &cobra.Command{
 	Use:     "pir-verify",
-	Example: `  rekor-cli pir-verify --log-index <entry-index> --tree-id <tree-id>`,
+	Example: `  rekor-cli pir-verify --log-index <entry-index> --tree-id <tree-id> (--artifact <artifact-path> | --artifact-hash <artifact-hash>)`,
 	Short:   "Rekor pir-verify command",
 	Long:    `Verifies an entry exists in the transparency log through an inclusion proof, USING PIR QUERY`,
 	PreRun: func(cmd *cobra.Command, _ []string) {
@@ -81,6 +90,11 @@ var pirVerifyCmd = &cobra.Command{
 		}
 
 		err = VerifyPIREntry(cmd, pirLogEntry, logIndex, treeID)
+		if err != nil {
+			return nil, err
+		}
+
+		err = VerifyArtifactHash(cmd, pirLogEntry)
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +156,25 @@ func VerifyPIREntry(cmd *cobra.Command, pirEntry pir.PIRLogEntry, logIndex int64
 	return nil
 }
 
+func VerifyArtifactHash(cmd *cobra.Command, pirEntry pir.PIRLogEntry) error {
+
+	providedArtifactHash, err := GetArtifactHashFromCmd(cmd)
+	if err != nil {
+		return err
+	}
+
+	entryArtifactHash, err := GetEntryArtifactHash(pirEntry)
+	if err != nil {
+		return err
+	}
+
+	if !strings.EqualFold(providedArtifactHash, entryArtifactHash) {
+		return fmt.Errorf("entry's artifact digest %s does not match the provided artifact digest %s", entryArtifactHash, providedArtifactHash)
+	}
+
+	return nil
+}
+
 func GetLogEntryByIndexWithPIR(logIndex int64) (pir.PIRLogEntry, error) {
 	pirQueryCmd := exec.Command("python", PIRQueryRekorServerScriptPath, "--index", strconv.FormatInt(logIndex, 10))
 	result, err := pirQueryCmd.Output()
@@ -169,17 +202,86 @@ func GetSignedHead(cmd *cobra.Command, rekorClient *rclient.Rekor) (*string, err
 	return logInfo.SignedTreeHead, nil
 }
 
+func GetEntryArtifactHash(pirEntry pir.PIRLogEntry) (string, error) {
+	var body struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			Data struct {
+				Hash struct {
+					Algorithm string `json:"algorithm"`
+					Value     string `json:"value"`
+				} `json:"hash"`
+			} `json:"data"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(pirEntry.Leaf, &body); err != nil {
+		return "", err
+	}
+
+	if body.Kind != "hashedrekord" {
+		return "", fmt.Errorf("unsupported entry kind %q: only hashedrekord entries can be bound to an artifact", body.Kind)
+	}
+
+	return util.PrefixSHA(body.Spec.Data.Hash.Algorithm + ":" + body.Spec.Data.Hash.Value), nil
+}
+
+func GetArtifactHashFromCmd(cmd *cobra.Command) (string, error) {
+	sha := viper.GetString("artifact-hash")
+	if sha != "" {
+		return util.PrefixSHA(sha), nil
+	}
+
+	artifactStr := viper.GetString("artifact")
+	if artifactStr == "" {
+		return "", nil
+	}
+
+	hasher := sha256.New()
+	log := log.CliLogger
+	var tee io.Reader
+	if isURL(artifactStr) {
+		r, err := util.FileOrURLReadCloser(cmd.Context(), artifactStr, nil)
+		if err != nil {
+			return "", fmt.Errorf("error fetching '%v': %w", artifactStr, err)
+		}
+		defer r.Close()
+		tee = io.TeeReader(r, hasher)
+	} else {
+		file, err := os.Open(filepath.Clean(artifactStr))
+		if err != nil {
+			return "", fmt.Errorf("error opening file '%v': %w", artifactStr, err)
+		}
+		defer func() {
+			if err := file.Close(); err != nil {
+				log.Error(err)
+			}
+		}()
+
+		tee = io.TeeReader(file, hasher)
+	}
+	if _, err := io.ReadAll(tee); err != nil {
+		return "", fmt.Errorf("error processing '%v': %w", artifactStr, err)
+	}
+
+	hashVal := strings.ToLower(hex.EncodeToString(hasher.Sum(nil)))
+	return util.PrefixSHA(hashVal), nil
+}
+
 func addTreeIDFlag(cmd *cobra.Command, required bool) error {
 	return addFlagToCmd(cmd, required, uintFlag, "tree-id", "the ID of the rekor tree")
 }
 
 func init() {
 	initializePFlagMap()
-	if err := addLogIndexFlag(pirVerifyCmd, false); err != nil {
+	if err := addLogIndexFlag(pirVerifyCmd, true); err != nil {
 		log.CliLogger.Fatal("Error parsing cmd line args:", err)
 	}
 
 	if err := addTreeIDFlag(pirVerifyCmd, false); err != nil {
+		log.CliLogger.Fatal("Error parsing cmd line args:", err)
+	}
+
+	if err := addArtifactPFlags(pirVerifyCmd); err != nil {
 		log.CliLogger.Fatal("Error parsing cmd line args:", err)
 	}
 
