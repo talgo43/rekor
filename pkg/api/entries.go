@@ -577,6 +577,8 @@ func GetLogEntryByUUIDHandler(params entries.GetLogEntryByUUIDParams) middleware
 		}
 		return handleRekorAPIError(params, http.StatusInternalServerError, err, trillianCommunicationError)
 	}
+
+	logPrivacyLeakage(params.HTTPRequest, logEntry)
 	return entries.NewGetLogEntryByUUIDOK().WithPayload(logEntry)
 }
 
